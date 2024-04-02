@@ -3,18 +3,33 @@
  * File: mini_spec.c
  * 
  * Ver and date:
+ * 
+ *        1.0.3.1 / 2024-3-28
+ *        - added RA2 as input and command 'W' to read its state
+ *        - time delays in 'S', 'G' and 'A' commands set t 50 ms.
+ *        - changes in ms_delay function
+ * 
+ *        1.0.3.0 / 2024-3-27
+ *        - time delay in 'G' command handling changed from 200 to 50 ms
+ * 
+ *        1.0.2.1 / 2024-2-9
+ *        - added the 200 ms delay in 'G' command handling
+ * 
+ *        1.0.2.0 / 2024-1-27
+ *        - new command "G" for sending a channel reading from previously measured spectrum
+ * 
  *        1.0.1.1 / 2024-1-1
  *        - new delay function expMsDelay
  *        - integration time set using numBuffer instead of rotation method
  *        - XC8 compiler version 2.45
- *        - DFP version 1.23.382
+ *        - DFP version 1.23.382 
  *        0.3.4 / 13.5.2022
  *        - extra getSpectrum - call in init
  *        - systematic use of ms_delay -function
- *        - adjustable LED instensity 
+ *        - adjustable LED intensity 
  *       
  *        0.3.1 / 8.4.2022 (edit this version to fVersion variable!)
- *        This version is for printed circuitboard without level shifting transistors.
+ *        This version is for printed circuit board without level shifting transistors.
  *        These transistors also invert their level (note in spec_ST variable). Last version for level shifting 
  *        model is 17.12.2021.
  * 
@@ -68,6 +83,7 @@
 
 #include <xc.h>
 #include <stdint.h>
+#include <pic16f18426.h>
 
 #define LED LATCbits.LATC3
 
@@ -83,7 +99,7 @@
 # define CH_COUNT    290            
 
 // GLOBALS
-static char fVersion[4] = {1, 0, 1, 1}; // FIRMWARE VERSION, [ <major_1>, <major_2>, <minor>, <patch>]
+static char fVersion[4] = {1, 0, 3, 1}; // FIRMWARE VERSION, [ <major_1>, <major_2>, <minor>, <patch>]
 static uint16_t RTC;
 int outputNumbers[4] = {0, 0, 0, 0};    // four digit representation of an adc value
 int ADCValues[CH_COUNT];
@@ -100,7 +116,7 @@ void putU1(char c);
 void intToArray(int value);
 int readADC();
 int getSpectrum();
-int expReadADC();
+int ReadADC();
 void SourceIntensity(int DAC_value); 
 
 // INTERRUPT SERVICE ROUTINE
@@ -122,19 +138,10 @@ void __interrupt() myISR(){
 }
 
 // DELAY
-// edit : 10.12.2021
+// edit : 2023-12-28
 // desc : Timer0 overflow every 4/Fosc * prescaler * postscaler =
 //        4 / 4 MHz * 1:4 * 1:1 = 1 ms
 void ms_delay(uint16_t msec){
-    uint16_t end_time = RTC + msec;
-    while (end_time != RTC)
-        ;
-}
-
-// EXP DELAY
-// edit : 2023-12-28
-// desc : Same as ms_delay but simpler
-void expMsDelay(uint16_t msec){
     msec = msec + RTC;
     while(msec != RTC)
         ;
@@ -155,7 +162,7 @@ void blinkLED(uint8_t blinks){
 
 // READ CHAR 
 // edit : 15.11.2021
-// todo : simplify this when reading becomes realible
+// todo : simplify this when reading becomes more reliable
 char getU1(){
     char c = 0;
     
@@ -184,26 +191,12 @@ void putU1(char c){
 	TX1REG = c;
 }
 
-// READ A ADC VALUE
-// edit : 17.12.2021
-int readADC(){
-    int result = 0;
-    LED = 1;
-    PIR1bits.ADIF = 0;  // reset flag
-    ADCON0bits.GO = 1;  // start conversion
-    while(ADCON0bits.GO == 1)
-    //while(PIR1bits.ADIF == 0)
-        ;
-    result = ADRESH << 8;
-    LED = 0;
-    return result + ADRESL;
-}
 
-// EXPERIMENTAL READ A ADC VALUE
-// edit : 13.12.2021
-int expReadADC(){
+// READ ADC VALUE
+// edit : 2024-3-28
+int ReadADC(){
     int result = 0;
-    uint8_t oldADCLK = ADCLK;
+    //uint8_t oldADCLK = ADCLK;
     ADCLK = 0x0F;           // 0x06 --> 3,5 us
                             // 0x0F --> 7,5 us
     
@@ -214,7 +207,7 @@ int expReadADC(){
     while(ADCON0bits.GO == 1)
         ;
     ADCPCON0bits.CPON = 0;  // deactivate charge pump
-    ADCLK = oldADCLK;       // return AD clock value
+    //ADCLK = oldADCLK;       // return AD clock value
     
     result = ADRESH << 8;
     return result + ADRESL;
@@ -231,15 +224,13 @@ int expReadADC(){
  *					5) take 287 readings in the same way right after rising TRG edge
  *					6) simultaneously with the 289th rising edge rises also EOS (end of scan) signal
  * 
- * TODO : optimize expReadADC and then copy changes to actual readADC function.
  */
  int getSpectrum(){
 
-	//int delay;
 	int old_TRG_count;  // must be signed integer
     int k;
     
-    /* init with recognizeable value */
+    /* init with recognizable value */
     // 11.3.2022
     for(k=0; k<CH_COUNT; k++){
         ADCValues[k] = 0;
@@ -263,8 +254,7 @@ int expReadADC(){
     while(old_TRG_count < CH_COUNT){     // 11.3.2022
 		if(old_TRG_count != TRG_counter){
             old_TRG_count = TRG_counter;
-            //ADCValues[old_TRG_count] = readADC();
-            ADCValues[old_TRG_count] = expReadADC();
+            ADCValues[old_TRG_count] = ReadADC();
     	}
 	}
    
@@ -374,7 +364,7 @@ void main(void)
     SPBRG = 0x19;           // 9600 with 4MHz oscillator
     
     
-    RC4PPS = 0x0F;          //  TX1 at pin RC4
+    RC4PPS = 0x0F;          // TX1 at pin RC4
     ANSELCbits.ANSC4 = 0;   // RC4 is digital
     TRISCbits.TRISC4 = 0;   // RC4 is output
     
@@ -450,6 +440,11 @@ void main(void)
     TRISCbits.TRISC0 = 0;   // ST @ RC0 is output
     
     // OTHER INITS
+    
+    ANSELAbits.ANSA2 = 0;   // RA2 is analog input by default, make it digital
+    TRISAbits.TRISA2 = 1;   // RA2 is input
+    WPUAbits.WPUA2 = 1;     // activate weak-pull-up on RA2 input
+    
     // ver 13.5.2022
     INTCONbits.GIE = 1;     // enable all active interrupts
     led_state = 0;
@@ -457,32 +452,43 @@ void main(void)
     integ_time = 10;        // default integration time is 10 ms
     getSpectrum();          // read one spectrum to init the sensor
     blinkLED(2);
-                
+                    
     // MAIN LOOP
-    // edit : 2023-12-28
+    // edit : 2024-3-27
     /*  command set: 
-        'S' read a single pre selected channel
-        'A' read all channels
+        'S' read spectrum and send a single pre selected channel
+        'G' send a single pre selected channel from already measured spectrum
+        'A' read spectrum and send all channels
         'L' flash LED pre set number of times
         'I' set one step higher integration time (after max value returns to min value).
         'R' reset instrument
         'V' read instrument firmware version
-        'H' change LED instensity to pre set value
+        'H' change LED intensity to pre set value
         extra test commands:
         'E' read directly ADC (no spectrometer reading)  
         'F' check fixed voltage reference (FVR) status
+        'W' read input state '0' or '1'
      */
     while(1){
         
         ms_delay(5);
-                 
+        
+        // test input pin RA2
+        /*
+        if (PORTAbits.RA2 == 1)
+            LED = 1;
+        else
+            LED = 0;
+        */
+        
         if(PIR3bits.RC1IF){			// UART1 receive buffer data available
 			command = getU1();
             
             switch(command){
                 
-                // read a single pre selected channel
-                // edit : 25.3.2022
+                // First measure a new spectrum and then 
+                // send the value of a single pre selected channel.
+                // edit : 2024-3-28
                 case 'S':
                    
                     putU1(command);
@@ -496,10 +502,13 @@ void main(void)
                     numBuffer[2] = '\n';
                     numBuffer[3] = '\n';
                     b_index = 0;
-                    if (i < 1 || i > 288)
-                        i = 115;
                     
-                    ms_delay(200);          // to let UART operations finish (?)
+                    /*
+                    if (i < 1 || i > 288)   // unnecessary ?
+                        i = 115;
+                    */
+                    
+                    ms_delay(50);           // 100 worked well
                     getSpectrum();          // updates ADCValues[]
                     				
                     // print channel index
@@ -516,15 +525,50 @@ void main(void)
 					                    
                     break;
                     
+                // Send one pre-selected value from already measured spectrum.
+                // edit 2024-3-27
+                case 'G':
+                    putU1(command);
+                    putU1('\n');
+					putU1('\r');
+                    
+                    // channel number 1...288
+                    i = atoi(numBuffer);
+                    numBuffer[0] = '\n';
+                    numBuffer[1] = '\n';
+                    numBuffer[2] = '\n';
+                    numBuffer[3] = '\n';
+                    b_index = 0;
+                                       
+                    ms_delay(50);          // 100 worked well
+                    
+                    // print channel index
+                    intToArray(i);          // updates outputNumbers[]
+					for(j=0; j<4; j++)
+                        putU1(outputNumbers[j] + '0');
+					putU1(' ');        
+					
+                    // print channel value
+					intToArray(ADCValues[i]); 
+					for(j=0; j<4; j++)
+						putU1(outputNumbers[j] + '0');
+					putU1('\n');
+                    putU1('\r');
+                    
+                    break;
+                
+                
+                    
                 // read a full spectrum
-                // edit 6.5.2022
+                // edit : 2024-3-28
+                // todo : check if delay is necessary
 				case 'A':
 					putU1(command);
 					putU1('\n');
 					putU1('\r');
                     
-                    ms_delay(200);  // let UART operations finish
-                                       
+                    ms_delay(50);  // let UART operations finish
+                                                           
                     readingCount = getSpectrum();
                     intToArray(readingCount);             
                     //itoa(outputNumbers, readingCount, 10);  // Causes error in mini_main program : "invalid literal for int() with base 10"
@@ -584,14 +628,6 @@ void main(void)
                     numBuffer[3] = '\n';
                     b_index = 0;
                     
-                    /*
-                    // rotate values
-                    integ_time = integ_time + 10;
-                    if (integ_time == 110)
-                        integ_time = 10;
-                    
-                    */
-
                     intToArray(integ_time);
                     
                     for(i=0; i<4; i++)
@@ -658,7 +694,7 @@ void main(void)
 					putU1(command);
 					putU1('\n');
 					putU1('\r');
-                    intToArray(expReadADC());
+                    intToArray(ReadADC());
                     putU1(outputNumbers[0]+'0');
                     putU1(outputNumbers[1]+'0');
                     putU1(outputNumbers[2]+'0');
@@ -677,6 +713,19 @@ void main(void)
                     putU1('\n');
                     putU1('\r');
                     break;
+                
+                // Send back the state of input RA2 as 'W0' or 'W1
+                // edit: 2024-3-28
+                case 'W':
+                    putU1(command);
+                    if(RA2 == 1)
+                        putU1('1');
+                    else
+                        putU1('0');
+                    putU1('\n');
+                    putU1('\r');
+                    break;
+                    
                                 
                 // default, capture possible numbers for later use    
                 default:
