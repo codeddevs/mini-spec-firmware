@@ -4,6 +4,14 @@
  * 
  * Ver and date:
  * 
+ *        1.0.4.1 /2024-10-9
+ *        - Optimizing values of ADCLK and ADACQL 
+ * 
+ *        1.0.4.0 / 2024-8-31
+ *        - ReadADC function modified
+ *        - ADC clock setting moved from ReadADC to initialization part of main
+ *        - Added constant adc sampling delay using reg ADACQ
+ * 
  *        1.0.3.1 / 2024-3-28
  *        - added RA2 as input and command 'W' to read its state
  *        - time delays in 'S', 'G' and 'A' commands set t 50 ms.
@@ -99,7 +107,7 @@
 # define CH_COUNT    290            
 
 // GLOBALS
-static char fVersion[4] = {1, 0, 3, 1}; // FIRMWARE VERSION, [ <major_1>, <major_2>, <minor>, <patch>]
+static char fVersion[4] = {1, 0, 4, 1}; // FIRMWARE VERSION, [ <major_1>, <major_2>, <minor>, <patch>]
 static uint16_t RTC;
 int outputNumbers[4] = {0, 0, 0, 0};    // four digit representation of an adc value
 int ADCValues[CH_COUNT];
@@ -193,21 +201,14 @@ void putU1(char c){
 
 
 // READ ADC VALUE
-// edit : 2024-3-28
+// edit : 2024-8-31
+// desc : Set GO bit to start the conversion and wait GO bit to reset when conversion is done.
 int ReadADC(){
     int result = 0;
-    //uint8_t oldADCLK = ADCLK;
-    ADCLK = 0x0F;           // 0x06 --> 3,5 us
-                            // 0x0F --> 7,5 us
     
-    ADCPCON0bits.CPON = 1;  // activate charge pump
-    while(ADCPCON0 ==  0)   // wait until charge pump is ready
-        ;
-    ADCON0bits.GO = 1;      // start conversion
+    ADCON0bits.GO = 1;                  // start conversion
     while(ADCON0bits.GO == 1)
         ;
-    ADCPCON0bits.CPON = 0;  // deactivate charge pump
-    //ADCLK = oldADCLK;       // return AD clock value
     
     result = ADRESH << 8;
     return result + ADRESL;
@@ -397,16 +398,22 @@ void main(void)
     TRISCbits.TRISC3 = 0;
     
     // ADC at RC1
-    // edit : 17.12.2021
+    // edit : 2024-8-31
     TRISCbits.TRISC1 = 1;   // disable output driver
     ANSELCbits.ANSC1 = 1;   // analog input
     ADPCH = 0x11;           // b010001, RC1 Positive Input Channel (PCH) selection bits
     
     ADCON0bits.CS = 0;      // ADC clock supplied by Fosc
     //ADCLK = 0x01;           // b000001,  --> Fosc/(2*(ADCLK[7:0]+1)) = Fosc/4 --> 1 us Tad
-    ADCLK = 0x03;           // b000011,  --> Fosc/(2*(ADCLK[7:0]+1)) = Fosc/8 --> 2 us Tad
+    //ADCLK = 0x03;           // b000011,  --> Fosc/(2*(ADCLK[7:0]+1)) = Fosc/8 --> 2 us Tad
     //ADCLK = 0x04;           // b000100,  --> Fosc/(2*(ADCLK[7:0]+1)) = Fosc/10 --> 4 us Tad
-                 
+    //ADCLK = 0x0F;           // 0x0F --> 8 us Tad
+    ADCLK = 0x0F;           // 0x1F --> 16 us Tad
+    
+    ADACQH = 0x0;           // upper adc sampling delay reg
+    //ADACQL = 0x80;          // lower adc sampling delay reg, 128 x 0.28 usec delay
+    ADACQL = 0x0;
+                     
     ADREFbits.NREF = 0; 	// 0, negative ref voltage is Vss
     ADREFbits.PREF1 = 1;    // b11, positive reference is internal Fixed Voltage Reference (FVR) module
     ADREFbits.PREF0 = 1;
@@ -418,12 +425,11 @@ void main(void)
     ADCON0bits.CONT = 0;    // continuous operation disabled
     ADCON2bits.MD = 0;      // Legacy mode, no DSP
     ADCON0bits.ON = 1;      // ADC is enabled
-    //ADCPCON0bits.CPON = 1;  // activate charge pump // 10.12.2021 remove if unnecessary
-    
+        
     // DAC for LED intensity control
     // uses earlier set FVR value
-    // edit : 6.5.2022
-    TRISAbits.TRISA0 = 1;   // RA0 is output (necessary?)
+    // edit : 2024-7-30
+    //TRISAbits.TRISA0 = 1;   // RA0 is output (necessary?) ??? WRONG VALUE
     
     FVRCONbits.CDAFVR1 = 1; // Comparator & DAC FVR buffer gain is 4x (4.096)
     FVRCONbits.CDAFVR0 = 1;
@@ -644,7 +650,7 @@ void main(void)
                     led_state = 0;
                     LED = 0;
                     
-                    // init spectrometer itegration time
+                    // init spectrometer integration time
                     integ_time = 10;        // 10 ms
                     
                     // reset buffer for inputs
